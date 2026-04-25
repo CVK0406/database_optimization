@@ -2,13 +2,16 @@ package utils;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.sql.Connection;
 import java.sql.SQLException;
 
 public class DatabaseConnection {
     private static HikariConfig config = new HikariConfig();
     private static HikariDataSource ds;
+
+    private static final Logger logger = LoggerFactory.getLogger(DatabaseConnection.class);
 
     static {
         config.setJdbcUrl("jdbc:postgresql://localhost:5432/ecommerce_before");
@@ -23,7 +26,7 @@ public class DatabaseConnection {
         config.addDataSourceProperty("cachePrepStmts", "true");
         config.addDataSourceProperty("prepStmtCacheSize", "250");
         config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
-
+        logger.info("Initial Hikari Connection Pool for database...");
         ds = new HikariDataSource(config);
     }
 
