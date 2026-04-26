@@ -11,6 +11,27 @@ import java.sql.SQLException;
 public class QueryBenchmark {
 
     /**
+     * Helper: Runs EXPLAIN ANALYZE on a query and prints the execution plan.
+     */
+    private void printExplainPlan(Connection conn, String label, String sql, String... params) {
+        String explainSql = "EXPLAIN ANALYZE " + sql;
+        try (PreparedStatement pstmt = conn.prepareStatement(explainSql)) {
+            for (int i = 0; i < params.length; i++) {
+                pstmt.setString(i + 1, params[i]);
+            }
+            try (ResultSet rs = pstmt.executeQuery()) {
+                System.out.println("\n--- EXPLAIN ANALYZE: " + label + " ---");
+                while (rs.next()) {
+                    System.out.println("  " + rs.getString(1));
+                }
+                System.out.println("--- END EXPLAIN ---\n");
+            }
+        } catch (SQLException e) {
+            System.err.println("Could not get EXPLAIN plan for " + label + ": " + e.getMessage());
+        }
+    }
+
+    /**
      * Problem 1: Purchase History Query (Power of Indexing)
      * Executes a 4-table join to retrieve the purchase history for a specific user.
      */
@@ -35,6 +56,9 @@ public class QueryBenchmark {
                     stmt.execute("SET enable_indexscan = on; SET enable_bitmapscan = on;");
                 }
             }
+
+            // Print EXPLAIN ANALYZE plan
+            printExplainPlan(conn, useIndex ? "Index Scan" : "Sequential Scan", sql, customerUniqueId);
 
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, customerUniqueId);
@@ -78,8 +102,14 @@ public class QueryBenchmark {
         try (Connection conn = DatabaseConnection.getBeforeConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
-            pstmt.setString(1, year + "-01-01 00:00:00");
-            pstmt.setString(2, (year + 1) + "-01-01 00:00:00");
+            String startDate = year + "-01-01 00:00:00";
+            String endDate = (year + 1) + "-01-01 00:00:00";
+
+            pstmt.setString(1, startDate);
+            pstmt.setString(2, endDate);
+
+            // Print EXPLAIN ANALYZE plan
+            printExplainPlan(conn, "Unoptimized Revenue (JOIN)", sql, startDate, endDate);
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
@@ -115,8 +145,14 @@ public class QueryBenchmark {
         try (Connection conn = DatabaseConnection.getBeforeConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
-            pstmt.setString(1, year + "-01-01");
-            pstmt.setString(2, (year + 1) + "-01-01");
+            String startDate = year + "-01-01";
+            String endDate = (year + 1) + "-01-01";
+
+            pstmt.setString(1, startDate);
+            pstmt.setString(2, endDate);
+
+            // Print EXPLAIN ANALYZE plan
+            printExplainPlan(conn, "Partitioned Revenue (Pruned)", sql, startDate, endDate);
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
@@ -138,7 +174,7 @@ public class QueryBenchmark {
      * Problem 3: Deep Pagination - Offset Method
      * Scans and discards rows until the offset is reached.
      */
-    public long benchmarkOffsetPagination(int limit, int offset) {
+    public long benchmarkOffsetPagination(int offset, int limit) {
         String sql = "SELECT * FROM orders ORDER BY order_purchase_timestamp DESC LIMIT ? OFFSET ?";
 
         long startTime = System.currentTimeMillis();
@@ -149,6 +185,19 @@ public class QueryBenchmark {
 
             pstmt.setInt(1, limit);
             pstmt.setInt(2, offset);
+
+            // Print EXPLAIN ANALYZE plan (use string params for the helper)
+            String explainSql = "EXPLAIN ANALYZE SELECT * FROM orders ORDER BY order_purchase_timestamp DESC LIMIT " + limit + " OFFSET " + offset;
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(explainSql)) {
+                System.out.println("\n--- EXPLAIN ANALYZE: Offset Pagination ---");
+                while (rs.next()) {
+                    System.out.println("  " + rs.getString(1));
+                }
+                System.out.println("--- END EXPLAIN ---\n");
+            } catch (SQLException e) {
+                System.err.println("Could not get EXPLAIN plan for Offset: " + e.getMessage());
+            }
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {
@@ -181,6 +230,19 @@ public class QueryBenchmark {
 
             pstmt.setString(1, lastTimestampString);
             pstmt.setInt(2, limit);
+
+            // Print EXPLAIN ANALYZE plan
+            String explainSql = "EXPLAIN ANALYZE SELECT * FROM orders WHERE order_purchase_timestamp < '" + lastTimestampString + "' ORDER BY order_purchase_timestamp DESC LIMIT " + limit;
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(explainSql)) {
+                System.out.println("\n--- EXPLAIN ANALYZE: Keyset Pagination ---");
+                while (rs.next()) {
+                    System.out.println("  " + rs.getString(1));
+                }
+                System.out.println("--- END EXPLAIN ---\n");
+            } catch (SQLException e) {
+                System.err.println("Could not get EXPLAIN plan for Keyset: " + e.getMessage());
+            }
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {

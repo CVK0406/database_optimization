@@ -37,13 +37,18 @@ CREATE TABLE IF NOT EXISTS order_items (
 -- PHASE 2 PROBLEM 1: INDEX OPTIMIZATION
 -- ==========================================
 
--- Index on Foreign Key
-CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
+-- 1. B-Tree Index on Foreign Key (Standard Index)
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
 
--- Index on customer_unique_id for the Purchase History Query
-CREATE INDEX IF NOT EXISTS idx_users_customer_unique_id ON users(customer_unique_id);
+-- 2. Composite Index (Multiple Columns)
+-- Helps the JOIN condition and the ORDER BY clause simultaneously
+CREATE INDEX IF NOT EXISTS idx_orders_composite ON orders(customer_id, order_purchase_timestamp DESC);
 
--- Index on order_purchase_timestamp for Keyset Pagination (Phase 3)
+-- 3. Covering Index (using INCLUDE)
+-- Allows an Index-Only Scan by keeping customer_id in the index leaf nodes
+CREATE INDEX IF NOT EXISTS idx_users_covering ON users(customer_unique_id) INCLUDE (customer_id);
+
+-- Additional index for Keyset Pagination
 CREATE INDEX IF NOT EXISTS idx_orders_purchase_timestamp ON orders(order_purchase_timestamp DESC);
 
 
