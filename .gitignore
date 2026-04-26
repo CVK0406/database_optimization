@@ -37,3 +37,8 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+scripts/orders.csv
+scripts/users.csv
+scripts/order_items.csv
+scripts/products.csv
