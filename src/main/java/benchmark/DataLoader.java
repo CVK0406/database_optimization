@@ -7,6 +7,7 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.Statement;
 import java.sql.SQLException;
 
 public class DataLoader {
@@ -15,14 +16,25 @@ public class DataLoader {
      * Scenario 1: Measure time for single insert (row-by-row).
      * This method represents the bottleneck caused by network round-trips.
      */
+    public void truncateAllTables() {
+        String sql = "TRUNCATE TABLE order_items_partitioned, orders_partitioned, order_items, orders, products, users CASCADE";
+        try (Connection conn = DatabaseConnection.getBeforeConnection();
+             Statement stmt = conn.createStatement()) {
+            System.out.println("Clearing database before ingestion...");
+            stmt.executeUpdate(sql);
+        } catch (SQLException e) {
+            System.err.println("Error truncating tables: " + e.getMessage());
+        }
+    }
+
     public long insertOrdersSingle(String csvFilePath, int limit) {
         String sql = "INSERT INTO orders (order_id, customer_id, status, order_purchase_timestamp) VALUES (?, ?, ?, CAST(? AS timestamp))";
         long startTime = System.currentTimeMillis();
         int count = 0;
 
         try (Connection conn = DatabaseConnection.getBeforeConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql);
-             BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
 
             String line;
             boolean firstLine = true;
@@ -32,7 +44,8 @@ public class DataLoader {
                     continue; // Skip the header row
                 }
                 String[] data = line.split(",");
-                if (data.length < 4) continue;
+                if (data.length < 4)
+                    continue;
 
                 pstmt.setString(1, data[0]);
                 pstmt.setString(2, data[1]);
@@ -63,9 +76,9 @@ public class DataLoader {
         int count = 0;
 
         try (Connection conn = DatabaseConnection.getBeforeConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql);
-             BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
-            
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
+
             conn.setAutoCommit(false); // CRITICAL: Disables implicit commits to massively speed up batch processing
 
             String line;
@@ -76,7 +89,8 @@ public class DataLoader {
                     continue; // Skip the header row
                 }
                 String[] data = line.split(",");
-                if (data.length < 4) continue;
+                if (data.length < 4)
+                    continue;
 
                 pstmt.setString(1, data[0]);
                 pstmt.setString(2, data[1]);
@@ -91,7 +105,7 @@ public class DataLoader {
                     pstmt.executeBatch();
                 }
             }
-            
+
             // Execute any remaining queries in the final batch
             pstmt.executeBatch();
             conn.commit(); // Commit the transaction
@@ -106,7 +120,7 @@ public class DataLoader {
         return elapsed;
     }
 
-    public void insertUsersBatch(String csvFilePath, int limit, int batchSize) {
+    public long insertUsersSingle(String csvFilePath, int limit) {
         String sql = "INSERT INTO users (customer_id, customer_unique_id, zip_code, city, state) VALUES (?, ?, ?, ?, ?)";
         long startTime = System.currentTimeMillis();
         int count = 0;
@@ -114,14 +128,53 @@ public class DataLoader {
         try (Connection conn = DatabaseConnection.getBeforeConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql);
              BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
-            
+
+            String line;
+            boolean firstLine = true;
+            while ((line = br.readLine()) != null && count < limit) {
+                if (firstLine) {
+                    firstLine = false;
+                    continue;
+                }
+                String[] data = line.split(",");
+                if (data.length < 5)
+                    continue;
+
+                pstmt.setString(1, data[0]);
+                pstmt.setString(2, data[1]);
+                pstmt.setString(3, data[2]);
+                pstmt.setString(4, data[3]);
+                pstmt.setString(5, data[4]);
+                
+                pstmt.executeUpdate();
+                count++;
+            }
+        } catch (Exception e) {
+            System.err.println("Error inserting users (single): " + e.getMessage());
+        }
+        return System.currentTimeMillis() - startTime;
+    }
+
+    public long insertUsersBatch(String csvFilePath, int limit, int batchSize) {
+        String sql = "INSERT INTO users (customer_id, customer_unique_id, zip_code, city, state) VALUES (?, ?, ?, ?, ?)";
+        long startTime = System.currentTimeMillis();
+        int count = 0;
+
+        try (Connection conn = DatabaseConnection.getBeforeConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
+
             conn.setAutoCommit(false);
             String line;
             boolean firstLine = true;
             while ((line = br.readLine()) != null && count < limit) {
-                if (firstLine) { firstLine = false; continue; }
+                if (firstLine) {
+                    firstLine = false;
+                    continue;
+                }
                 String[] data = line.split(",");
-                if (data.length < 5) continue;
+                if (data.length < 5)
+                    continue;
 
                 pstmt.setString(1, data[0]);
                 pstmt.setString(2, data[1]);
@@ -130,7 +183,8 @@ public class DataLoader {
                 pstmt.setString(5, data[4]);
                 pstmt.addBatch();
                 count++;
-                if (count % batchSize == 0) pstmt.executeBatch();
+                if (count % batchSize == 0)
+                    pstmt.executeBatch();
             }
             pstmt.executeBatch();
             conn.commit();
@@ -139,9 +193,10 @@ public class DataLoader {
         }
         long endTime = System.currentTimeMillis();
         System.out.println("Inserted " + count + " Users in " + (endTime - startTime) + " ms");
+        return endTime - startTime;
     }
 
-    public void insertProductsBatch(String csvFilePath, int limit, int batchSize) {
+    public long insertProductsSingle(String csvFilePath, int limit) {
         String sql = "INSERT INTO products (product_id, category_name, weight_g) VALUES (?, ?, ?)";
         long startTime = System.currentTimeMillis();
         int count = 0;
@@ -149,14 +204,51 @@ public class DataLoader {
         try (Connection conn = DatabaseConnection.getBeforeConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql);
              BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
-            
+
+            String line;
+            boolean firstLine = true;
+            while ((line = br.readLine()) != null && count < limit) {
+                if (firstLine) {
+                    firstLine = false;
+                    continue;
+                }
+                String[] data = line.split(",");
+                if (data.length < 3)
+                    continue;
+
+                pstmt.setString(1, data[0]);
+                pstmt.setString(2, data[1]);
+                pstmt.setInt(3, Integer.parseInt(data[2].trim()));
+                
+                pstmt.executeUpdate();
+                count++;
+            }
+        } catch (Exception e) {
+            System.err.println("Error inserting products (single): " + e.getMessage());
+        }
+        return System.currentTimeMillis() - startTime;
+    }
+
+    public long insertProductsBatch(String csvFilePath, int limit, int batchSize) {
+        String sql = "INSERT INTO products (product_id, category_name, weight_g) VALUES (?, ?, ?)";
+        long startTime = System.currentTimeMillis();
+        int count = 0;
+
+        try (Connection conn = DatabaseConnection.getBeforeConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
+
             conn.setAutoCommit(false);
             String line;
             boolean firstLine = true;
             while ((line = br.readLine()) != null && count < limit) {
-                if (firstLine) { firstLine = false; continue; }
+                if (firstLine) {
+                    firstLine = false;
+                    continue;
+                }
                 String[] data = line.split(",");
-                if (data.length < 3) continue;
+                if (data.length < 3)
+                    continue;
 
                 pstmt.setString(1, data[0]);
                 pstmt.setString(2, data[1]);
@@ -167,7 +259,8 @@ public class DataLoader {
                 }
                 pstmt.addBatch();
                 count++;
-                if (count % batchSize == 0) pstmt.executeBatch();
+                if (count % batchSize == 0)
+                    pstmt.executeBatch();
             }
             pstmt.executeBatch();
             conn.commit();
@@ -176,9 +269,10 @@ public class DataLoader {
         }
         long endTime = System.currentTimeMillis();
         System.out.println("Inserted " + count + " Products in " + (endTime - startTime) + " ms");
+        return endTime - startTime;
     }
 
-    public void insertOrderItemsBatch(String csvFilePath, int limit, int batchSize) {
+    public long insertOrderItemsSingle(String csvFilePath, int limit) {
         String sql = "INSERT INTO order_items (order_id, order_item_id, product_id, price, freight_value) VALUES (?, ?, ?, ?, ?)";
         long startTime = System.currentTimeMillis();
         int count = 0;
@@ -186,14 +280,53 @@ public class DataLoader {
         try (Connection conn = DatabaseConnection.getBeforeConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql);
              BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
-            
+
+            String line;
+            boolean firstLine = true;
+            while ((line = br.readLine()) != null && count < limit) {
+                if (firstLine) {
+                    firstLine = false;
+                    continue;
+                }
+                String[] data = line.split(",");
+                if (data.length < 5)
+                    continue;
+
+                pstmt.setString(1, data[0]);
+                pstmt.setInt(2, Integer.parseInt(data[1].trim()));
+                pstmt.setString(3, data[2]);
+                pstmt.setBigDecimal(4, new java.math.BigDecimal(data[3].trim()));
+                pstmt.setBigDecimal(5, new java.math.BigDecimal(data[4].trim()));
+                
+                pstmt.executeUpdate();
+                count++;
+            }
+        } catch (Exception e) {
+            System.err.println("Error inserting order_items (single): " + e.getMessage());
+        }
+        return System.currentTimeMillis() - startTime;
+    }
+
+    public long insertOrderItemsBatch(String csvFilePath, int limit, int batchSize) {
+        String sql = "INSERT INTO order_items (order_id, order_item_id, product_id, price, freight_value) VALUES (?, ?, ?, ?, ?)";
+        long startTime = System.currentTimeMillis();
+        int count = 0;
+
+        try (Connection conn = DatabaseConnection.getBeforeConnection();
+                PreparedStatement pstmt = conn.prepareStatement(sql);
+                BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
+
             conn.setAutoCommit(false);
             String line;
             boolean firstLine = true;
             while ((line = br.readLine()) != null && count < limit) {
-                if (firstLine) { firstLine = false; continue; }
+                if (firstLine) {
+                    firstLine = false;
+                    continue;
+                }
                 String[] data = line.split(",");
-                if (data.length < 5) continue;
+                if (data.length < 5)
+                    continue;
 
                 pstmt.setString(1, data[0]);
                 pstmt.setInt(2, Integer.parseInt(data[1].trim()));
@@ -202,7 +335,8 @@ public class DataLoader {
                 pstmt.setBigDecimal(5, new java.math.BigDecimal(data[4].trim()));
                 pstmt.addBatch();
                 count++;
-                if (count % batchSize == 0) pstmt.executeBatch();
+                if (count % batchSize == 0)
+                    pstmt.executeBatch();
             }
             pstmt.executeBatch();
             conn.commit();
@@ -211,5 +345,6 @@ public class DataLoader {
         }
         long endTime = System.currentTimeMillis();
         System.out.println("Inserted " + count + " Order Items in " + (endTime - startTime) + " ms");
+        return endTime - startTime;
     }
 }

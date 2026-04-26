@@ -69,7 +69,8 @@ public class QueryBenchmark {
         String sql = "SELECT SUM(oi.price) as total_revenue " +
                      "FROM order_items oi " +
                      "JOIN orders o ON oi.order_id = o.order_id " +
-                     "WHERE EXTRACT(YEAR FROM o.order_purchase_timestamp) = ?";
+                     "WHERE o.order_purchase_timestamp >= CAST(? AS timestamp) " +
+                     "AND o.order_purchase_timestamp < CAST(? AS timestamp)";
 
         long startTime = System.currentTimeMillis();
         double totalRevenue = 0.0;
@@ -77,7 +78,8 @@ public class QueryBenchmark {
         try (Connection conn = DatabaseConnection.getBeforeConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
-            pstmt.setInt(1, year);
+            pstmt.setString(1, year + "-01-01 00:00:00");
+            pstmt.setString(2, (year + 1) + "-01-01 00:00:00");
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
@@ -104,15 +106,17 @@ public class QueryBenchmark {
         // Due to denormalization, we avoid the JOIN.
         String sql = "SELECT SUM(price) as total_revenue " +
                      "FROM order_items_partitioned " +
-                     "WHERE EXTRACT(YEAR FROM order_date) = ?";
+                     "WHERE order_date >= CAST(? AS date) " +
+                     "AND order_date < CAST(? AS date)";
 
         long startTime = System.currentTimeMillis();
         double totalRevenue = 0.0;
 
-        try (Connection conn = DatabaseConnection.getAfterConnection();
+        try (Connection conn = DatabaseConnection.getBeforeConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
-            pstmt.setInt(1, year);
+            pstmt.setString(1, year + "-01-01");
+            pstmt.setString(2, (year + 1) + "-01-01");
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {

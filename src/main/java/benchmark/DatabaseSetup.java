@@ -85,7 +85,7 @@ public class DatabaseSetup {
                                "FROM order_items oi JOIN orders o ON oi.order_id = o.order_id " +
                                "ON CONFLICT DO NOTHING";
                                
-        try (Connection conn = utils.DatabaseConnection.getAfterConnection();
+        try (Connection conn = utils.DatabaseConnection.getBeforeConnection();
              Statement stmt = conn.createStatement()) {
             
             System.out.println("Executing Orders Migration... (This may take a minute)");
