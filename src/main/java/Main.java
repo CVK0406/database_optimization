@@ -31,7 +31,7 @@ public class Main {
             System.out.println("2. FULL LOAD BEFORE: Data Ingestion (Single vs Batch)");
             System.out.println("3. FULL LOAD AFTER: Partitioned Data Ingestion (Single vs Batch)");
             System.out.println("4. Compare: Purchase History (Sequential vs Index Scan)");
-            System.out.println("5. Compare: Revenue Report (Unoptimized vs Partitioned)");
+            System.out.println("5. Compare: Revenue Report (4 Scenarios)");
             System.out.println("6. Compare: Deep Pagination (Offset vs Keyset)");
             System.out.println("0. Exit");
             System.out.println("=========================================");

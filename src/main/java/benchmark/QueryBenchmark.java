@@ -35,8 +35,8 @@ public class QueryBenchmark {
      * Problem 1: Purchase History Query (Power of Indexing)
      * Executes a 4-table join to retrieve the purchase history for a specific user.
      * Compares:
-     * - ecommerce_before (baseline, no indexes): Sequential Scan
-     * - ecommerce_after (optimized, with indexes): Index Scan
+     * - ecommerce_before with indexes disabled: Sequential Scan
+     * - ecommerce_before with indexes enabled: Index Scan
      */
     public long benchmarkPurchaseHistoryQuery(String customerUniqueId, boolean useIndex) {
         String sql = "SELECT o.order_id, o.order_purchase_timestamp, p.category_name, oi.price " +
@@ -49,12 +49,21 @@ public class QueryBenchmark {
 
         long startTime = System.currentTimeMillis();
         int rows = 0;
-        String dbName = useIndex ? "ecommerce_after (With Indexes)" : "ecommerce_before (No Indexes)";
+        String dbName = useIndex ? "ecommerce_before (With Indexes)" : "ecommerce_before (No Indexes)";
 
-        try (Connection conn = useIndex ? DatabaseConnection.getAfterConnection() : DatabaseConnection.getBeforeConnection()) {
+        try (Connection conn = DatabaseConnection.getBeforeConnection()) {
+
+            // Control index usage
+            try (Statement stmt = conn.createStatement()) {
+                if (useIndex) {
+                    stmt.execute("SET enable_indexscan = on; SET enable_bitmapscan = on;");
+                } else {
+                    stmt.execute("SET enable_indexscan = off; SET enable_bitmapscan = off;");
+                }
+            }
 
             // Print EXPLAIN ANALYZE plan
-            printExplainPlan(conn, useIndex ? "Index Scan (ecommerce_after)" : "Sequential Scan (ecommerce_before)", sql, customerUniqueId);
+            printExplainPlan(conn, useIndex ? "Index Scan (ecommerce_before)" : "Sequential Scan (ecommerce_before)", sql, customerUniqueId);
 
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, customerUniqueId);
@@ -64,6 +73,11 @@ public class QueryBenchmark {
                         rows++;
                     }
                 }
+            }
+
+            // Reset index settings
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute("SET enable_indexscan = on; SET enable_bitmapscan = on;");
             }
 
         } catch (SQLException e) {
