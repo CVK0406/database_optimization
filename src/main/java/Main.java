@@ -28,8 +28,8 @@ public class Main {
             System.out.println("     DATABASE OPTIMIZATION BENCHMARK     ");
             System.out.println("=========================================");
             System.out.println("1. SETUP: Create Databases and Tables");
-            System.out.println("2. FULL LOAD & Compare: Data Ingestion (Single vs Batch)");
-            System.out.println("3. MIGRATE: Copy unoptimized data to Partitioned Schema");
+            System.out.println("2. FULL LOAD BEFORE: Data Ingestion (Single vs Batch)");
+            System.out.println("3. FULL LOAD AFTER: Partitioned Data Ingestion (Single vs Batch)");
             System.out.println("4. Compare: Purchase History (Sequential vs Index Scan)");
             System.out.println("5. Compare: Revenue Report (Unoptimized vs Partitioned)");
             System.out.println("6. Compare: Deep Pagination (Offset vs Keyset)");
@@ -66,8 +66,8 @@ public class Main {
                     System.out.println("\n--- Starting Full Data Ingestion Benchmark (Single vs Batch) ---");
                     System.out.println("NOTE: Single insert on large tables will take significant time. Please be patient.\n");
 
-                    // Clear everything once at the start for a clean slate
-                    dataLoader.truncateAllTables();
+                    // Clear ecommerce_before once at the start for a clean slate
+                    dataLoader.truncateBeforeTables();
 
                     // =========================================================
                     // TABLE 1: USERS (100,000 rows) - no FK dependencies
@@ -155,12 +155,93 @@ public class Main {
                     System.out.printf("%-22s | %12d | %12d | %9.2f%%%n", "Order Items (10M+)", singleItems, batchItems,
                         singleItems > 0 ? ((double)(singleItems - batchItems) / singleItems) * 100 : 0);
                     System.out.println("==========================================");
-                    System.out.println("Database is fully loaded. Run Option 3 (MIGRATE) next.");
+                    System.out.println("Database is fully loaded. Run Option 3 next to load ecommerce_after partitioned tables.");
                     break;
 
                 case "3":
-                    System.out.println("\n--- Starting Migration to Partitioned Schema ---");
-                    dbSetup.migrateDataToPartitionedTables();
+                    System.out.print("Enter path to Users CSV [default: scripts/users.csv]: ");
+                    String usersPathAfter = scanner.nextLine().replace("\"", "").trim();
+                    if (usersPathAfter.isEmpty()) usersPathAfter = "scripts/users.csv";
+
+                    System.out.print("Enter path to Products CSV [default: scripts/products.csv]: ");
+                    String productsPathAfter = scanner.nextLine().replace("\"", "").trim();
+                    if (productsPathAfter.isEmpty()) productsPathAfter = "scripts/products.csv";
+
+                    System.out.print("Enter path to Orders CSV [default: scripts/orders.csv]: ");
+                    String ordersPathAfter = scanner.nextLine().replace("\"", "").trim();
+                    if (ordersPathAfter.isEmpty()) ordersPathAfter = "scripts/orders.csv";
+
+                    System.out.print("Enter path to Order_Items CSV [default: scripts/order_items.csv]: ");
+                    String orderItemsPathAfter = scanner.nextLine().replace("\"", "").trim();
+                    if (orderItemsPathAfter.isEmpty()) orderItemsPathAfter = "scripts/order_items.csv";
+
+                    System.out.println("\n--- Starting Full Data Ingestion Benchmark on ecommerce_after (Partitioned Schema) ---");
+                    System.out.println("NOTE: Single insert on large tables will take significant time. Please be patient.\n");
+
+                    dataLoader.truncateAfterTables();
+
+                    System.out.println("=== [1/4] USERS TABLE (100,000 rows) ===");
+                    System.out.println("[1/2] Single Insert...");
+                    long singleUsersAfter = dataLoader.insertUsersSingleAfter(usersPathAfter, Integer.MAX_VALUE);
+                    try (java.sql.Connection c = utils.DatabaseConnection.getAfterConnection();
+                         java.sql.Statement s = c.createStatement()) {
+                        s.executeUpdate("TRUNCATE TABLE users CASCADE");
+                    } catch (Exception ignored) {}
+                    System.out.println("[2/2] Batch Insert...");
+                    long batchUsersAfter = dataLoader.insertUsersBatchAfter(usersPathAfter, Integer.MAX_VALUE, 10000);
+                    System.out.println("Single: " + singleUsersAfter + " ms | Batch: " + batchUsersAfter + " ms");
+                    System.out.printf("Speedup: %.2f%%%n", singleUsersAfter > 0 ? ((double)(singleUsersAfter - batchUsersAfter) / singleUsersAfter) * 100 : 0);
+
+                    System.out.println("\n=== [2/4] PRODUCTS TABLE (32,000 rows) ===");
+                    System.out.println("[1/2] Single Insert...");
+                    long singleProductsAfter = dataLoader.insertProductsSingleAfter(productsPathAfter, Integer.MAX_VALUE);
+                    try (java.sql.Connection c = utils.DatabaseConnection.getAfterConnection();
+                         java.sql.Statement s = c.createStatement()) {
+                        s.executeUpdate("TRUNCATE TABLE products CASCADE");
+                    } catch (Exception ignored) {}
+                    System.out.println("[2/2] Batch Insert...");
+                    long batchProductsAfter = dataLoader.insertProductsBatchAfter(productsPathAfter, Integer.MAX_VALUE, 10000);
+                    System.out.println("Single: " + singleProductsAfter + " ms | Batch: " + batchProductsAfter + " ms");
+                    System.out.printf("Speedup: %.2f%%%n", singleProductsAfter > 0 ? ((double)(singleProductsAfter - batchProductsAfter) / singleProductsAfter) * 100 : 0);
+
+                    System.out.println("\n=== [3/4] ORDERS_PARTITIONED TABLE (5,000,000 rows) ===");
+                    System.out.println("[1/2] Single Insert (will take several minutes)...");
+                    long singleOrdersAfter = dataLoader.insertOrdersSingleAfter(ordersPathAfter, Integer.MAX_VALUE);
+                    try (java.sql.Connection c = utils.DatabaseConnection.getAfterConnection();
+                         java.sql.Statement s = c.createStatement()) {
+                        s.executeUpdate("TRUNCATE TABLE orders_partitioned CASCADE");
+                    } catch (Exception ignored) {}
+                    System.out.println("[2/2] Batch Insert...");
+                    long batchOrdersAfter = dataLoader.insertOrdersBatchAfter(ordersPathAfter, Integer.MAX_VALUE, 10000);
+                    System.out.println("Single: " + singleOrdersAfter + " ms | Batch: " + batchOrdersAfter + " ms");
+                    System.out.printf("Speedup: %.2f%%%n", singleOrdersAfter > 0 ? ((double)(singleOrdersAfter - batchOrdersAfter) / singleOrdersAfter) * 100 : 0);
+
+                    System.out.println("\n=== [4/4] ORDER_ITEMS_PARTITIONED TABLE (10,000,000+ rows) ===");
+                    System.out.println("[1/2] Single Insert (will take a long time)...");
+                    long singleItemsAfter = dataLoader.insertOrderItemsSingleAfter(orderItemsPathAfter, Integer.MAX_VALUE);
+                    try (java.sql.Connection c = utils.DatabaseConnection.getAfterConnection();
+                         java.sql.Statement s = c.createStatement()) {
+                        s.executeUpdate("TRUNCATE TABLE order_items_partitioned CASCADE");
+                    } catch (Exception ignored) {}
+                    System.out.println("[2/2] Batch Insert...");
+                    long batchItemsAfter = dataLoader.insertOrderItemsBatchAfter(orderItemsPathAfter, Integer.MAX_VALUE, 10000);
+                    System.out.println("Single: " + singleItemsAfter + " ms | Batch: " + batchItemsAfter + " ms");
+                    System.out.printf("Speedup: %.2f%%%n", singleItemsAfter > 0 ? ((double)(singleItemsAfter - batchItemsAfter) / singleItemsAfter) * 100 : 0);
+
+                    System.out.println("\n==========================================");
+                    System.out.println("=== COMPARISON RESULT: PARTITIONED DATA INGESTION ===");
+                    System.out.println("==========================================");
+                    System.out.printf("%-28s | %12s | %12s | %10s%n", "Table", "Single (ms)", "Batch (ms)", "Speedup");
+                    System.out.println("----------------------------------------------------------------------");
+                    System.out.printf("%-28s | %12d | %12d | %9.2f%%%n", "Users (100k)", singleUsersAfter, batchUsersAfter,
+                        singleUsersAfter > 0 ? ((double)(singleUsersAfter - batchUsersAfter) / singleUsersAfter) * 100 : 0);
+                    System.out.printf("%-28s | %12d | %12d | %9.2f%%%n", "Products (32k)", singleProductsAfter, batchProductsAfter,
+                        singleProductsAfter > 0 ? ((double)(singleProductsAfter - batchProductsAfter) / singleProductsAfter) * 100 : 0);
+                    System.out.printf("%-28s | %12d | %12d | %9.2f%%%n", "Orders_Partitioned (5M)", singleOrdersAfter, batchOrdersAfter,
+                        singleOrdersAfter > 0 ? ((double)(singleOrdersAfter - batchOrdersAfter) / singleOrdersAfter) * 100 : 0);
+                    System.out.printf("%-28s | %12d | %12d | %9.2f%%%n", "Order_Items_Partitioned (10M+)", singleItemsAfter, batchItemsAfter,
+                        singleItemsAfter > 0 ? ((double)(singleItemsAfter - batchItemsAfter) / singleItemsAfter) * 100 : 0);
+                    System.out.println("==========================================");
                     break;
 
                 case "4":
@@ -184,16 +265,38 @@ public class Main {
                     int year = 2017;
                     try { year = Integer.parseInt(scanner.nextLine().trim()); } catch (Exception e) {}
 
-                    System.out.println("\n[1/2] Running Unoptimized Schema (Requires JOIN)...");
-                    long unoptTime = queryBenchmark.benchmarkRevenueReportUnoptimized(year);
-                    System.out.println("\n[2/2] Running Partitioned Schema (Direct Query)...");
-                    long partTime = queryBenchmark.benchmarkRevenueReportPartitioned(year);
+                    System.out.println("\n=== REVENUE REPORT BENCHMARK: 4 SCENARIOS ===");
+                    System.out.println("[1/4] Scenario 1: Baseline (Monolithic, No Indexes)...");
+                    long scenario1Time = queryBenchmark.benchmarkRevenueScenario1(year);
 
-                    System.out.println("\n=== COMPARISON RESULT: REVENUE REPORT ===");
-                    System.out.println("Unoptimized (JOIN):  " + unoptTime + " ms");
-                    System.out.println("Partitioned (Range): " + partTime + " ms");
-                    double partImprovement = unoptTime > 0 ? ((double)(unoptTime - partTime) / unoptTime) * 100 : 0;
-                    System.out.printf("Improvement:         %.2f%%%n", partImprovement);
+                    System.out.println("\n[2/4] Scenario 2: Index Only (Monolithic, With Indexes)...");
+                    long scenario2Time = queryBenchmark.benchmarkRevenueScenario2(year);
+
+                    System.out.println("\n[3/4] Scenario 3: Partition Only (Partitioned, No Indexes)...");
+                    long scenario3Time = queryBenchmark.benchmarkRevenueScenario3(year);
+
+                    System.out.println("\n[4/4] Scenario 4: Fully Optimized (Partitioned, With Indexes)...");
+                    long scenario4Time = queryBenchmark.benchmarkRevenueScenario4(year);
+
+                    System.out.println("\n==========================================");
+                    System.out.println("=== COMPARISON RESULT: REVENUE REPORT ===");
+                    System.out.println("==========================================");
+                    System.out.printf("%-35s | %10s%n", "Scenario", "Time (ms)");
+                    System.out.println("--------------------------------------------");
+                    System.out.printf("%-35s | %10d%n", "1. Baseline (No optimization)", scenario1Time);
+                    System.out.printf("%-35s | %10d%n", "2. Index Only (+Indexing)", scenario2Time);
+                    System.out.printf("%-35s | %10d%n", "3. Partition Only (+Partitioning)", scenario3Time);
+                    System.out.printf("%-35s | %10d%n", "4. Fully Optimized (+Both)", scenario4Time);
+                    System.out.println("==========================================");
+
+                    // Calculate improvements
+                    double indexImprovement = scenario1Time > 0 ? ((double)(scenario1Time - scenario2Time) / scenario1Time) * 100 : 0;
+                    double partitionImprovement = scenario1Time > 0 ? ((double)(scenario1Time - scenario3Time) / scenario1Time) * 100 : 0;
+                    double combinedImprovement = scenario1Time > 0 ? ((double)(scenario1Time - scenario4Time) / scenario1Time) * 100 : 0;
+
+                    System.out.printf("Indexing benefit:     %.2f%%%n", indexImprovement);
+                    System.out.printf("Partitioning benefit: %.2f%%%n", partitionImprovement);
+                    System.out.printf("Combined benefit:     %.2f%%%n", combinedImprovement);
                     break;
 
                 case "6":

@@ -1,5 +1,5 @@
 -- ==========================================
--- ECOMMERCE BEFORE (UNOPTIMIZED SCHEMA)
+-- PHASE 2 PROBLEM 1: BASE TABLES FOR ECOMMERCE_AFTER
 -- ==========================================
 
 CREATE TABLE IF NOT EXISTS users (
@@ -15,42 +15,6 @@ CREATE TABLE IF NOT EXISTS products (
     category_name VARCHAR(100),
     weight_g INTEGER
 );
-
-CREATE TABLE IF NOT EXISTS orders (
-    order_id VARCHAR(50) PRIMARY KEY,
-    customer_id VARCHAR(50) REFERENCES users(customer_id),
-    status VARCHAR(20),
-    order_purchase_timestamp TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS order_items (
-    order_id VARCHAR(50) REFERENCES orders(order_id),
-    order_item_id INTEGER,
-    product_id VARCHAR(50) REFERENCES products(product_id),
-    price NUMERIC(10,2),
-    freight_value NUMERIC(10,2),
-    PRIMARY KEY (order_id, order_item_id)
-);
-
-
--- ==========================================
--- PHASE 2 PROBLEM 1: INDEX OPTIMIZATION
--- ==========================================
-
--- 1. B-Tree Index on Foreign Key (Standard Index)
-CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
-
--- 2. Composite Index (Multiple Columns)
--- Helps the JOIN condition and the ORDER BY clause simultaneously
-CREATE INDEX IF NOT EXISTS idx_orders_composite ON orders(customer_id, order_purchase_timestamp DESC);
-
--- 3. Covering Index (using INCLUDE)
--- Allows an Index-Only Scan by keeping customer_id in the index leaf nodes
-CREATE INDEX IF NOT EXISTS idx_users_covering ON users(customer_unique_id) INCLUDE (customer_id);
-
--- Additional index for Keyset Pagination
-CREATE INDEX IF NOT EXISTS idx_orders_purchase_timestamp ON orders(order_purchase_timestamp DESC);
-
 
 -- ==========================================
 -- PHASE 2 PROBLEM 2: ECOMMERCE AFTER (PARTITIONED SCHEMA)
@@ -90,5 +54,13 @@ CREATE TABLE IF NOT EXISTS order_items_2017 PARTITION OF order_items_partitioned
 CREATE TABLE IF NOT EXISTS order_items_2018 PARTITION OF order_items_partitioned FOR VALUES FROM ('2018-01-01') TO ('2019-01-01');
 CREATE TABLE IF NOT EXISTS order_items_2019 PARTITION OF order_items_partitioned FOR VALUES FROM ('2019-01-01') TO ('2020-01-01');
 CREATE TABLE IF NOT EXISTS order_items_2020_beyond PARTITION OF order_items_partitioned FOR VALUES FROM ('2020-01-01') TO ('2030-01-01');
+
+-- ==========================================
+-- PHASE 2 PROBLEM 3: INDEX OPTIMIZATION FOR ECOMMERCE_AFTER
+-- ==========================================
+CREATE INDEX IF NOT EXISTS idx_users_covering_after ON users(customer_unique_id) INCLUDE (customer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_partitioned_customer_id ON orders_partitioned(customer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_partitioned_purchase_timestamp ON orders_partitioned(order_purchase_timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_order_items_partitioned_order_id ON order_items_partitioned(order_id);
 
 -- Note: In PostgreSQL 11+, Foreign Keys referencing partitioned tables are supported, but must include the partition key.

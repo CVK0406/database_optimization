@@ -34,6 +34,9 @@ public class QueryBenchmark {
     /**
      * Problem 1: Purchase History Query (Power of Indexing)
      * Executes a 4-table join to retrieve the purchase history for a specific user.
+     * Compares:
+     * - ecommerce_before (baseline, no indexes): Sequential Scan
+     * - ecommerce_after (optimized, with indexes): Index Scan
      */
     public long benchmarkPurchaseHistoryQuery(String customerUniqueId, boolean useIndex) {
         String sql = "SELECT o.order_id, o.order_purchase_timestamp, p.category_name, oi.price " +
@@ -46,19 +49,12 @@ public class QueryBenchmark {
 
         long startTime = System.currentTimeMillis();
         int rows = 0;
+        String dbName = useIndex ? "ecommerce_after (With Indexes)" : "ecommerce_before (No Indexes)";
 
-        try (Connection conn = DatabaseConnection.getBeforeConnection()) {
-            
-            try (Statement stmt = conn.createStatement()) {
-                if (!useIndex) {
-                    stmt.execute("SET enable_indexscan = off; SET enable_bitmapscan = off;");
-                } else {
-                    stmt.execute("SET enable_indexscan = on; SET enable_bitmapscan = on;");
-                }
-            }
+        try (Connection conn = useIndex ? DatabaseConnection.getAfterConnection() : DatabaseConnection.getBeforeConnection()) {
 
             // Print EXPLAIN ANALYZE plan
-            printExplainPlan(conn, useIndex ? "Index Scan" : "Sequential Scan", sql, customerUniqueId);
+            printExplainPlan(conn, useIndex ? "Index Scan (ecommerce_after)" : "Sequential Scan (ecommerce_before)", sql, customerUniqueId);
 
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 pstmt.setString(1, customerUniqueId);
@@ -70,26 +66,22 @@ public class QueryBenchmark {
                 }
             }
 
-            try (Statement stmt = conn.createStatement()) {
-                stmt.execute("SET enable_indexscan = on; SET enable_bitmapscan = on;");
-            }
-
         } catch (SQLException e) {
-            System.err.println("Error executing Purchase History Query: " + e.getMessage());
+            System.err.println("Error executing Purchase History Query on " + dbName + ": " + e.getMessage());
         }
 
         long endTime = System.currentTimeMillis();
         long elapsed = endTime - startTime;
-        System.out.println("Purchase History (" + (useIndex ? "Indexed" : "Sequential Scan") + "): Retrieved " + rows + " rows in " + elapsed + " ms");
+        System.out.println("Purchase History (" + dbName + "): Retrieved " + rows + " rows in " + elapsed + " ms");
         return elapsed;
     }
 
     /**
-     * Problem 2: Revenue Report Query (Unoptimized / Index Only)
-     * Executes an aggregation query over millions of rows with a JOIN.
-     * This method represents Scenarios 1 & 2 from the report.
+     * Problem 2: Revenue Report Query - Scenario 1 (Baseline)
+     * Monolithic tables, no indexes (indexes disabled)
+     * This represents the worst-case scenario.
      */
-    public long benchmarkRevenueReportUnoptimized(int year) {
+    public long benchmarkRevenueScenario1(int year) {
         String sql = "SELECT SUM(oi.price) as total_revenue " +
                      "FROM order_items oi " +
                      "JOIN orders o ON oi.order_id = o.order_id " +
@@ -102,6 +94,11 @@ public class QueryBenchmark {
         try (Connection conn = DatabaseConnection.getBeforeConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
+            // Force sequential scan (disable indexes)
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute("SET enable_indexscan = off; SET enable_bitmapscan = off;");
+            }
+
             String startDate = year + "-01-01 00:00:00";
             String endDate = (year + 1) + "-01-01 00:00:00";
 
@@ -109,7 +106,60 @@ public class QueryBenchmark {
             pstmt.setString(2, endDate);
 
             // Print EXPLAIN ANALYZE plan
-            printExplainPlan(conn, "Unoptimized Revenue (JOIN)", sql, startDate, endDate);
+            printExplainPlan(conn, "Scenario 1: Baseline (No Indexes)", sql, startDate, endDate);
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    totalRevenue = rs.getDouble("total_revenue");
+                }
+            }
+
+            // Reset index settings
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute("SET enable_indexscan = on; SET enable_bitmapscan = on;");
+            }
+
+        } catch (SQLException e) {
+            System.err.println("Error executing Revenue Report Scenario 1: " + e.getMessage());
+        }
+
+        long endTime = System.currentTimeMillis();
+        long elapsed = endTime - startTime;
+        System.out.println("Revenue Scenario 1 (Baseline - No Indexes): $" + totalRevenue + " in " + elapsed + " ms");
+        return elapsed;
+    }
+
+    /**
+     * Problem 2: Revenue Report Query - Scenario 2 (Index Only)
+     * Monolithic tables, with indexes enabled
+     * Shows the benefit of indexing alone.
+     */
+    public long benchmarkRevenueScenario2(int year) {
+        String sql = "SELECT SUM(oi.price) as total_revenue " +
+                     "FROM order_items oi " +
+                     "JOIN orders o ON oi.order_id = o.order_id " +
+                     "WHERE o.order_purchase_timestamp >= CAST(? AS timestamp) " +
+                     "AND o.order_purchase_timestamp < CAST(? AS timestamp)";
+
+        long startTime = System.currentTimeMillis();
+        double totalRevenue = 0.0;
+
+        try (Connection conn = DatabaseConnection.getBeforeConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            // Ensure indexes are enabled
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute("SET enable_indexscan = on; SET enable_bitmapscan = on;");
+            }
+
+            String startDate = year + "-01-01 00:00:00";
+            String endDate = (year + 1) + "-01-01 00:00:00";
+
+            pstmt.setString(1, startDate);
+            pstmt.setString(2, endDate);
+
+            // Print EXPLAIN ANALYZE plan
+            printExplainPlan(conn, "Scenario 2: Index Only", sql, startDate, endDate);
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
@@ -118,21 +168,21 @@ public class QueryBenchmark {
             }
 
         } catch (SQLException e) {
-            System.err.println("Error executing Unoptimized Revenue Report: " + e.getMessage());
+            System.err.println("Error executing Revenue Report Scenario 2: " + e.getMessage());
         }
 
         long endTime = System.currentTimeMillis();
         long elapsed = endTime - startTime;
-        System.out.println("Unoptimized Revenue Report: Calculated total revenue (" + totalRevenue + ") for year " + year + " in " + elapsed + " ms");
+        System.out.println("Revenue Scenario 2 (Index Only): $" + totalRevenue + " in " + elapsed + " ms");
         return elapsed;
     }
 
     /**
-     * Problem 2: Revenue Report Query (Partition Only / Index + Partition)
-     * Executes an aggregation query on the denormalized, partitioned schema.
-     * Avoids the JOIN entirely. Represents Scenarios 3 & 4.
+     * Problem 2: Revenue Report Query - Scenario 3 (Partition Only)
+     * Partitioned tables, but indexes disabled
+     * Shows the benefit of partitioning alone.
      */
-    public long benchmarkRevenueReportPartitioned(int year) {
+    public long benchmarkRevenueScenario3(int year) {
         // Due to denormalization, we avoid the JOIN.
         String sql = "SELECT SUM(price) as total_revenue " +
                      "FROM order_items_partitioned " +
@@ -142,8 +192,13 @@ public class QueryBenchmark {
         long startTime = System.currentTimeMillis();
         double totalRevenue = 0.0;
 
-        try (Connection conn = DatabaseConnection.getBeforeConnection();
+        try (Connection conn = DatabaseConnection.getAfterConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            // Force sequential scan within partitions (disable indexes)
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute("SET enable_indexscan = off; SET enable_bitmapscan = off;");
+            }
 
             String startDate = year + "-01-01";
             String endDate = (year + 1) + "-01-01";
@@ -152,7 +207,60 @@ public class QueryBenchmark {
             pstmt.setString(2, endDate);
 
             // Print EXPLAIN ANALYZE plan
-            printExplainPlan(conn, "Partitioned Revenue (Pruned)", sql, startDate, endDate);
+            printExplainPlan(conn, "Scenario 3: Partition Only (No Indexes)", sql, startDate, endDate);
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    totalRevenue = rs.getDouble("total_revenue");
+                }
+            }
+
+            // Reset index settings
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute("SET enable_indexscan = on; SET enable_bitmapscan = on;");
+            }
+
+        } catch (SQLException e) {
+            System.err.println("Error executing Revenue Report Scenario 3: " + e.getMessage());
+        }
+
+        long endTime = System.currentTimeMillis();
+        long elapsed = endTime - startTime;
+        System.out.println("Revenue Scenario 3 (Partition Only): $" + totalRevenue + " in " + elapsed + " ms");
+        return elapsed;
+    }
+
+    /**
+     * Problem 2: Revenue Report Query - Scenario 4 (Fully Optimized)
+     * Partitioned tables with indexes enabled
+     * Shows the combined benefit of partitioning + indexing.
+     */
+    public long benchmarkRevenueScenario4(int year) {
+        // Due to denormalization, we avoid the JOIN.
+        String sql = "SELECT SUM(price) as total_revenue " +
+                     "FROM order_items_partitioned " +
+                     "WHERE order_date >= CAST(? AS date) " +
+                     "AND order_date < CAST(? AS date)";
+
+        long startTime = System.currentTimeMillis();
+        double totalRevenue = 0.0;
+
+        try (Connection conn = DatabaseConnection.getAfterConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            // Ensure indexes are enabled
+            try (Statement stmt = conn.createStatement()) {
+                stmt.execute("SET enable_indexscan = on; SET enable_bitmapscan = on;");
+            }
+
+            String startDate = year + "-01-01";
+            String endDate = (year + 1) + "-01-01";
+
+            pstmt.setString(1, startDate);
+            pstmt.setString(2, endDate);
+
+            // Print EXPLAIN ANALYZE plan
+            printExplainPlan(conn, "Scenario 4: Fully Optimized (Partition + Index)", sql, startDate, endDate);
 
             try (ResultSet rs = pstmt.executeQuery()) {
                 if (rs.next()) {
@@ -161,17 +269,17 @@ public class QueryBenchmark {
             }
 
         } catch (SQLException e) {
-            System.err.println("Error executing Partitioned Revenue Report: " + e.getMessage());
+            System.err.println("Error executing Revenue Report Scenario 4: " + e.getMessage());
         }
 
         long endTime = System.currentTimeMillis();
         long elapsed = endTime - startTime;
-        System.out.println("Partitioned Revenue Report: Calculated total revenue (" + totalRevenue + ") for year " + year + " in " + elapsed + " ms");
+        System.out.println("Revenue Scenario 4 (Fully Optimized): $" + totalRevenue + " in " + elapsed + " ms");
         return elapsed;
     }
 
     /**
-     * Problem 3: Deep Pagination - Offset Method
+     * Problem 3: Deep Pagination - Offset Method (on ecommerce_before baseline)
      * Scans and discards rows until the offset is reached.
      */
     public long benchmarkOffsetPagination(int offset, int limit) {
@@ -190,7 +298,7 @@ public class QueryBenchmark {
             String explainSql = "EXPLAIN ANALYZE SELECT * FROM orders ORDER BY order_purchase_timestamp DESC LIMIT " + limit + " OFFSET " + offset;
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(explainSql)) {
-                System.out.println("\n--- EXPLAIN ANALYZE: Offset Pagination ---");
+                System.out.println("\n--- EXPLAIN ANALYZE: Offset Pagination (ecommerce_before) ---");
                 while (rs.next()) {
                     System.out.println("  " + rs.getString(1));
                 }
@@ -206,36 +314,37 @@ public class QueryBenchmark {
             }
 
         } catch (SQLException e) {
-            System.err.println("Error executing Offset Pagination: " + e.getMessage());
+            System.err.println("Error executing Offset Pagination on ecommerce_before: " + e.getMessage());
         }
 
         long endTime = System.currentTimeMillis();
         long elapsed = endTime - startTime;
-        System.out.println("Offset Pagination (OFFSET " + offset + "): Retrieved " + rows + " rows in " + elapsed + " ms");
+        System.out.println("Offset Pagination (ecommerce_before - OFFSET " + offset + "): Retrieved " + rows + " rows in " + elapsed + " ms");
         return elapsed;
     }
 
     /**
      * Problem 3: Deep Pagination - Keyset (Seek) Method
      * Uses the last value from the previous page to seek the next set directly.
+     * Runs on ecommerce_after which has indexes for optimal performance.
      */
     public long benchmarkKeysetPagination(String lastTimestampString, int limit) {
-        String sql = "SELECT * FROM orders WHERE order_purchase_timestamp < CAST(? AS timestamp) ORDER BY order_purchase_timestamp DESC LIMIT ?";
+        String sql = "SELECT * FROM orders_partitioned WHERE order_purchase_timestamp < CAST(? AS timestamp) ORDER BY order_purchase_timestamp DESC LIMIT ?";
 
         long startTime = System.currentTimeMillis();
         int rows = 0;
 
-        try (Connection conn = DatabaseConnection.getBeforeConnection();
+        try (Connection conn = DatabaseConnection.getAfterConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
 
             pstmt.setString(1, lastTimestampString);
             pstmt.setInt(2, limit);
 
             // Print EXPLAIN ANALYZE plan
-            String explainSql = "EXPLAIN ANALYZE SELECT * FROM orders WHERE order_purchase_timestamp < '" + lastTimestampString + "' ORDER BY order_purchase_timestamp DESC LIMIT " + limit;
+            String explainSql = "EXPLAIN ANALYZE SELECT * FROM orders_partitioned WHERE order_purchase_timestamp < '" + lastTimestampString + "' ORDER BY order_purchase_timestamp DESC LIMIT " + limit;
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(explainSql)) {
-                System.out.println("\n--- EXPLAIN ANALYZE: Keyset Pagination ---");
+                System.out.println("\n--- EXPLAIN ANALYZE: Keyset Pagination (ecommerce_after) ---");
                 while (rs.next()) {
                     System.out.println("  " + rs.getString(1));
                 }
@@ -251,12 +360,12 @@ public class QueryBenchmark {
             }
 
         } catch (SQLException e) {
-            System.err.println("Error executing Keyset Pagination: " + e.getMessage());
+            System.err.println("Error executing Keyset Pagination on ecommerce_after: " + e.getMessage());
         }
 
         long endTime = System.currentTimeMillis();
         long elapsed = endTime - startTime;
-        System.out.println("Keyset Pagination (SEEK < '" + lastTimestampString + "'): Retrieved " + rows + " rows in " + elapsed + " ms");
+        System.out.println("Keyset Pagination (ecommerce_after - SEEK < '" + lastTimestampString + "'): Retrieved " + rows + " rows in " + elapsed + " ms");
         return elapsed;
     }
 }
